@@ -1,0 +1,104 @@
+#!groovy
+
+properties([
+  pipelineTriggers([cron('H 07 * * 1-5')]),
+  copyArtifactPermission('*'),
+  parameters([
+    booleanParam(name: 'Smoke', defaultValue: true, description: 'Run smoke tests'),
+    booleanParam(name: 'Regression', defaultValue: true, description: 'Run regression tests'),
+  ])
+])
+@Library('Infrastructure')
+def type = 'angular'
+def product = 'appreg'
+def component = 'frontend'
+def secrets = [
+  'appreg-${env}': [
+    secret('POSTGRES-USER', 'DB_USER'),
+    secret('POSTGRES-PASS', 'DB_PASSWORD'),
+    secret('POSTGRES-HOST', 'DB_HOST'),
+    secret('POSTGRES-PORT', 'DB_PORT'),
+    secret('POSTGRES-DATABASE', 'DB_NAME'),
+    secret('TEST-USER1-EMAIL', 'TEST_USER1_EMAIL'),
+    secret('TEST-USER2-EMAIL', 'TEST_USER2_EMAIL'),
+    secret('TEST-USER3-EMAIL', 'TEST_USER3_EMAIL'),
+    secret('TEST-ADMIN1-EMAIL', 'TEST_ADMIN1_EMAIL'),
+    secret('TEST-ADMIN2-EMAIL', 'TEST_ADMIN2_EMAIL'),
+    secret('TEST-ADMIN3-EMAIL', 'TEST_ADMIN3_EMAIL'),
+    secret('TEST-USERS-PASSWORD', 'TEST_USERS_PASSWORD'),
+  ]
+]
+static LinkedHashMap<String, Object> secret(String secretName, String envVar) {
+  [$class     : 'AzureKeyVaultSecret',
+   secretType : 'Secret',
+   name       : secretName,
+   version    : '',
+   envVariable: envVar
+  ]
+}
+def yarnBuilder = new uk.gov.hmcts.contino.YarnBuilder(this)
+
+withNightlyPipeline(type, product, component) {
+  loadVaultSecrets(secrets)
+  enableSlackNotifications('#appreg-builds')
+  
+  env.TEST_URL = 'https://appreg.staging.apps.hmcts.net/'
+
+  afterAlways('DependencyCheckNightly') {
+    stage('Connectivity Test') {
+      catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE', message: 'Connectivity test issues') {
+        sh "./cypress/scripts/connectivity/test-connectivity.sh ${env.TEST_URL}"
+      }
+    }
+    
+    echo 'Smoke: ' + params.Smoke
+    echo 'Regression: ' + params.Regression
+
+    if (params.Smoke || params.Regression) {
+      yarnBuilder.yarn('cypress:clean:reports')
+    }
+
+    if (params.Smoke) {
+      stage('Smoke Tests') {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', message: 'Smoke tests failed') {
+          try {
+            yarnBuilder.yarn('test:parallel:smoke:chrome')
+          } finally {
+            archiveArtifacts allowEmptyArchive: true, artifacts: 'functional-output/chrome/smoke/**/*'
+            junit allowEmptyResults: true, testResults: 'functional-output/**/*.xml,cypress/reports/junit/**/*.xml'
+            
+            publishHTML target: [
+              allowMissing         : true,
+              alwaysLinkToLastBuild: true,
+              keepAll              : true,
+              reportDir            : 'functional-output/chrome/smoke/cucumber-html',
+              reportFiles          : 'detailed-test-report.html',
+              reportName           : 'Cucumber Smoke Test Report'
+            ]
+          }
+        }
+      }
+    }
+
+    if (params.Regression) {
+      stage('Regression Tests') {
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE', message: 'Regression tests failed') {
+          try {
+            yarnBuilder.yarn('test:parallel:regression:chrome')
+          } finally {
+            archiveArtifacts allowEmptyArchive: true, artifacts: 'functional-output/chrome/regression/**/*'
+            junit allowEmptyResults: true, testResults: 'functional-output/**/*.xml,cypress/reports/junit/**/*.xml'           
+            publishHTML target: [
+              allowMissing         : true,
+              alwaysLinkToLastBuild: true,
+              keepAll              : true,
+              reportDir            : 'functional-output/chrome/regression/cucumber-html',
+              reportFiles          : 'detailed-test-report.html',
+              reportName           : 'Cucumber Regression Test Report'
+            ]
+          }
+        }
+      }
+    }
+  }
+}
