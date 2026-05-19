@@ -1,0 +1,582 @@
+/**
+ * DateTimeUtil - Date/time utility for test automation
+ *
+ * DATE KEYWORDS:
+ * - "today"           → Today's date in DD/MM/YYYY format
+ * - "tomorrow"        → Tomorrow's date in DD/MM/YYYY format
+ * - "yesterday"       → Yesterday's date in DD/MM/YYYY format
+ * - "todayiso"        → Today's date in YYYY-MM-DD format
+ * - "tomorrowiso"     → Tomorrow's date in YYYY-MM-DD format
+ * - "yesterdayiso"    → Yesterday's date in YYYY-MM-DD format
+ * - "todaydisplay"    → Today in D MMM YYYY format (e.g., "7 Feb 2026", no leading zero)
+ * - "todaydisplaylong"→ Today in D MMMM YYYY format (e.g., "7 February 2026", full month)
+ * - "displaypadded"   → Today in DD MMM YYYY format (e.g., "07 Feb 2026", padded)
+ *
+ * ISO DATE CONVERSION:
+ * - Any date with suffix "_iso" will be converted from YYYY-MM-DD to DD/MM/YYYY
+ * - Example: "2025-07-24_iso" → "24/07/2025"
+ *
+ * TIME KEYWORDS:
+ * - "timenow"         → Current time in HH:mm:ss format
+ * - "timenowhhmm"     → Current time in HH:mm format
+ * - "timestamp"       → Current GMT timestamp (ISO format)
+ * - "numerictimestamp"→ Current numeric timestamp (milliseconds)
+ * - "localtimestamp"  → Current local timestamp
+ *
+ * DATE ARITHMETIC (+ or -):
+ * - "today+1d"        → Tomorrow
+ * - "today-7d"        → 1 week ago
+ * - "today+2w"        → 2 weeks from today
+ * - "today+3m"        → 3 months from today
+ * - "today+1y"        → 1 year from today
+ *
+ * TIME ARITHMETIC (+ or -):
+ * - "timenow+2h"      → 2 hours from now
+ * - "timenow-30m"     → 30 minutes ago
+ * - "timenow+45s"     → 45 seconds from now
+ *
+ * TIMESTAMP ARITHMETIC:
+ * - "timestamp+1d"    → Timestamp 1 day from now
+ * - "timestamp-2h"    → Timestamp 2 hours ago
+ *
+ * STATIC VALUES:
+ * - "22/7/2024"       → Fixed date (unchanged)
+ * - "14:30:00"        → Fixed time (unchanged)
+ *
+ * UNITS SUPPORTED:
+ * - d = days, w = weeks, m = months, y = years
+ * - h = hours, m = minutes (in time context), s = seconds
+ */
+export class DateTimeUtil {
+  private constructor() {}
+
+  // Format constants
+  static readonly DTF_DD_MM_YYYY = 'DD/MM/YYYY';
+  static readonly DTF_DD_MMM_YYYY = 'DD MMM YYYY';
+  static readonly DTF_YYYY_MM_DD = 'YYYY-MM-DD';
+  static readonly DTF_GMT_TIMESTAMP = 'YYYY-MM-DDTHH:mm:ss.sssZ';
+  static readonly DTF_TIME_ONLY = 'HH:mm:ss';
+
+  /**
+   * Parses date strings in format "17 Apr 2025" into Date objects
+   * @param dateStr Date string to parse (e.g., "5 Dec 2025", "17 Apr 2025")
+   * @returns Parsed Date object
+   */
+  static parseDate(dateStr: string): Date {
+    // Handle format: "5 Dec 2025", "17 Apr 2025", etc.
+    const parts = dateStr.trim().split(/\s+/);
+    if (parts.length === 3) {
+      const day = Number.parseInt(parts[0], 10);
+      const month = parts[1];
+      const year = Number.parseInt(parts[2], 10);
+      // Convert month name to number (Jan=0, Feb=1, etc.)
+      const monthMap: Record<string, number> = {
+        Jan: 0,
+        Feb: 1,
+        Mar: 2,
+        Apr: 3,
+        May: 4,
+        Jun: 5,
+        Jul: 6,
+        Aug: 7,
+        Sep: 8,
+        Oct: 9,
+        Nov: 10,
+        Dec: 11,
+      };
+      const monthNum = monthMap[month];
+      if (monthNum !== undefined) {
+        return new Date(year, monthNum, day);
+      }
+    }
+    // Fallback to Date constructor
+    return new Date(dateStr);
+  }
+
+  /**
+   * Converts dynamic date/time strings to actual values
+   * @param dateValue Examples: "today", "today+7d", "today-3m", "timenow", "timestamp", "22/7/2024"
+   * @returns Processed date/time string in appropriate format
+   */
+  static parseDateValue(dateValue: string): string {
+    if (!dateValue || dateValue.trim() === '') {
+      return this.formatDate(new Date());
+    }
+
+    const trimmed = dateValue.trim();
+    const input = trimmed.toLowerCase();
+
+    // Run substitutions first so suffixes like "_iso" are handled even if they contain "-"
+    const substituted = this.substituteDateValue(trimmed);
+    if (substituted !== trimmed) {
+      return substituted;
+    }
+
+    // Parse arithmetic expressions
+    const arithmeticPattern =
+      /(today|todayiso|timenow|timenowhhmm|timestamp|numerictimestamp)([+-])(\d+)([dwmyhs])/i;
+    const arithmeticMatch = input.match(arithmeticPattern);
+
+    if (arithmeticMatch) {
+      const baseKeyword = arithmeticMatch[1];
+      const operator = arithmeticMatch[2];
+      const amount = Number.parseInt(arithmeticMatch[3]);
+      const unit = arithmeticMatch[4].toLowerCase();
+
+      const modifier = operator === '+' ? amount : -amount;
+
+      // Calculate result
+      return this.calculateArithmetic(baseKeyword, modifier, unit);
+    }
+
+    const inlineReplacement = this.replaceInlineKeywords(trimmed);
+    if (inlineReplacement !== trimmed) {
+      return inlineReplacement;
+    }
+
+    // If no pattern matches, treat as static date or return as-is
+    const result = trimmed;
+
+    // Validate date format if it looks like a date (contains /)
+    if (result.includes('/') && !this.isValidDateFormat(result)) {
+      throw new Error(
+        `Invalid date format: ${result}. Expected DD/MM/YYYY format.`,
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Validates that a string matches DD/MM/YYYY format
+   * @param dateStr The date string to validate
+   * @returns true if valid format
+   */
+  private static isValidDateFormat(dateStr: string): boolean {
+    const dateRegex = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
+    return dateRegex.test(dateStr);
+  }
+
+  /**
+   * Substitute special date/time keywords
+   * @param pattern The pattern to substitute
+   * @returns Substituted date/time string or original pattern
+   */
+  static substituteDateValue(pattern: string): string {
+    if (!pattern || pattern.trim() === '') {
+      return this.formatDate(new Date());
+    }
+
+    const trimmedPattern = pattern.trim();
+    const lowerPattern = trimmedPattern.toLowerCase();
+
+    // Check for ISO date conversion suffix (e.g., "2025-07-24_iso")
+    if (lowerPattern.endsWith('_iso')) {
+      const isoDate = trimmedPattern.slice(0, -4);
+      if (isoDate.includes('-')) {
+        const parts = isoDate.split('-');
+        if (parts.length === 3) {
+          const year = parts[0];
+          const month = parts[1];
+          const day = parts[2];
+          return `${Number.parseInt(day, 10)}/${Number.parseInt(month, 10)}/${year}`;
+        }
+      }
+    }
+
+    switch (lowerPattern) {
+      // Date keywords
+      case 'today':
+        return this.formatDate(new Date());
+      case 'tomorrow':
+        return this.getDateWithOffset(1);
+      case 'yesterday':
+        return this.getDateWithOffset(-1);
+      case 'todayiso':
+        return this.formatToday('iso');
+      case 'tomorrowiso':
+        return this.getDateWithOffset(1, 'iso');
+      case 'yesterdayiso':
+        return this.getDateWithOffset(-1, 'iso');
+      case 'todaydisplay':
+        return this.formatToday('display');
+      case 'todaydisplaylong':
+        return this.formatToday('displaylong');
+      case 'displaypadded':
+        return this.formatToday('padded');
+
+      // Time keywords
+      case 'timenow':
+        return this.timeNow();
+      case 'timenowhhmm':
+        return this.timeNowHHMM();
+      case 'timestamp':
+        return this.createTimestamp('iso');
+      case 'numerictimestamp':
+        return this.createTimestamp('numeric');
+      case 'localtimestamp':
+        return this.createTimestamp('local');
+
+      // Fallback
+      default:
+        return pattern;
+    }
+  }
+
+  private static replaceInlineKeywords(value: string): string {
+    const replacements: { key: string; getValue: () => string }[] = [
+      { key: 'todayiso', getValue: () => this.formatToday('iso') },
+      { key: 'tomorrowiso', getValue: () => this.getDateWithOffset(1, 'iso') },
+      {
+        key: 'yesterdayiso',
+        getValue: () => this.getDateWithOffset(-1, 'iso'),
+      },
+      {
+        key: 'todaydisplaylong',
+        getValue: () => this.formatToday('displaylong'),
+      },
+      { key: 'todaydisplay', getValue: () => this.formatToday('display') },
+      { key: 'today', getValue: () => this.formatDate(new Date()) },
+      { key: 'tomorrow', getValue: () => this.getDateWithOffset(1) },
+      { key: 'yesterday', getValue: () => this.getDateWithOffset(-1) },
+      { key: 'displaypadded', getValue: () => this.formatToday('padded') },
+      { key: 'timenowhhmm', getValue: () => this.timeNowHHMM() },
+      { key: 'timenow', getValue: () => this.timeNow() },
+      { key: 'timestamp', getValue: () => this.createTimestamp('iso') },
+      {
+        key: 'numerictimestamp',
+        getValue: () => this.createTimestamp('numeric'),
+      },
+      { key: 'localtimestamp', getValue: () => this.createTimestamp('local') },
+    ];
+
+    let result = value;
+    let replaced = false;
+
+    for (const { key, getValue } of replacements) {
+      const regex = new RegExp(key, 'gi');
+      if (regex.test(result)) {
+        const replacementValue = getValue();
+        result = result.replace(regex, replacementValue);
+        replaced = true;
+      }
+    }
+
+    return replaced ? result : value;
+  }
+
+  /**
+   * Unified arithmetic calculation for time, date, and timestamp
+   * @param baseType The base type: 'time', 'date', 'timestamp', 'numerictimestamp'
+   * @param modifier The amount to add/subtract
+   * @param unit The time unit
+   * @returns Modified value string
+   */
+  static calculateArithmetic(
+    baseType: string,
+    modifier: number,
+    unit: string,
+  ): string {
+    const now = new Date();
+    let effectiveUnit = unit;
+
+    // Handle context-dependent 'm' unit:
+    // 'm' = months for date contexts, minutes for time contexts
+    if (unit === 'm') {
+      const isTimeContext = [
+        'timenow',
+        'time',
+        'timestamp',
+        'numerictimestamp',
+      ].includes(baseType.toLowerCase());
+      effectiveUnit = isTimeContext ? 'min' : 'm'; // Use 'min' for minutes to avoid conflict
+    }
+
+    // Apply arithmetic
+    const result = this.addToDateTime(now, modifier, effectiveUnit);
+
+    // Return appropriate format based on base type
+    switch (baseType.toLowerCase()) {
+      case 'timenow':
+      case 'time':
+        return this.formatTime(result);
+      case 'timenowhhmm':
+        return this.timeNowHHMMFromDate(result);
+      case 'timestamp':
+        return result.toISOString();
+      case 'numerictimestamp':
+        return result.getTime().toString();
+      case 'todayiso':
+        return result.toISOString().split('T')[0];
+      case 'today':
+      case 'date':
+      default:
+        return this.formatDate(result);
+    }
+  }
+
+  static timeNowHHMMFromDate(date: Date): string {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
+
+  /**
+   * Format time as HH:mm:ss with padded values
+   * @param date Date object to format
+   * @returns Time string in HH:mm:ss format
+   */
+  static formatTime(date: Date): string {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    const seconds = date.getSeconds().toString().padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
+  }
+
+  /**
+   * Get current time in HH:mm:ss format
+   */
+  static timeNow(): string {
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    const seconds = now.getSeconds().toString().padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
+  }
+
+  /**
+   * Get current time in HH:mm format
+   */
+  static timeNowHHMM(): string {
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
+
+  /**
+   * Format today's date in different formats
+   * @param format The format type: 'display', 'iso', 'displaylong', or 'padded'
+   * @returns Formatted date string
+   */
+  static formatToday(
+    format: 'display' | 'iso' | 'displaylong' | 'padded' = 'display',
+  ): string {
+    const date = new Date();
+
+    switch (format) {
+      case 'iso':
+        return date.toISOString().split('T')[0]; // YYYY-MM-DD
+      case 'display':
+        return this.formatWithPattern(date, 'D MMM YYYY'); // D MMM YYYY (no leading zero)
+      case 'displaylong':
+        return this.formatWithPattern(date, 'D MMMM YYYY'); // D MMMM YYYY (full month)
+      case 'padded':
+        return this.formatWithPattern(date, 'DD MMM YYYY'); // DD MMM YYYY
+      default:
+        return this.formatWithPattern(date, 'D MMM YYYY');
+    }
+  }
+
+  /**
+   * Date arithmetic method
+   * @param amount Amount to add (positive) or subtract (negative)
+   * @param unit Time unit ('d', 'w', 'm', 'y')
+   * @returns Date string in DD/MM/YYYY format
+   */
+  static dateArithmetic(amount: number, unit: string): string {
+    return this.formatDate(this.addToDateTime(new Date(), amount, unit));
+  }
+
+  /**
+   * Format Date object to DD/MM/YYYY string
+   * @param date The Date object to format
+   * @returns Formatted date string
+   */
+  static formatDate(date: Date): string {
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0'); // Month is 0-indexed
+    const year = date.getFullYear();
+
+    return `${day}/${month}/${year}`;
+  }
+
+  /**
+   * Format date with custom pattern
+   * @param date The Date object
+   * @param pattern The pattern string
+   * @returns Formatted date string
+   */
+  static formatWithPattern(date: Date, pattern: string): string {
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear().toString();
+    const shortMonth = date.toLocaleDateString('en', { month: 'short' });
+    const longMonth = date.toLocaleDateString('en', { month: 'long' });
+    const replacements: Record<string, string> = {
+      YYYY: year,
+      YY: year.slice(-2),
+      MMMM: longMonth,
+      MMM: shortMonth,
+      MM: month,
+      M: (date.getMonth() + 1).toString(),
+      DD: day,
+      D: date.getDate().toString(),
+    };
+
+    return pattern.replaceAll(
+      /YYYY|YY|MMMM|MMM|MM|M|DD|D/g,
+      (token) => replacements[token],
+    );
+  }
+
+  /**
+   * Create and format timestamps
+   * @param type Type of timestamp: 'iso', 'numeric', 'local', or custom date/time
+   * @param date Optional date string
+   * @param time Optional time string
+   * @returns Formatted timestamp
+   */
+  static createTimestamp(
+    type: 'iso' | 'numeric' | 'local' = 'iso',
+    date?: string,
+    time?: string,
+  ): string {
+    const now = new Date();
+
+    if (date || time) {
+      const dateStr = date || this.formatToday('iso');
+      const timeStr = time || this.timeNow();
+      return `${dateStr}T${timeStr}.000Z`;
+    }
+
+    switch (type) {
+      case 'iso':
+        return now.toISOString();
+      case 'numeric':
+        return now.getTime().toString();
+      case 'local':
+        return now.toLocaleString();
+      default:
+        return now.toISOString();
+    }
+  }
+
+  /**
+   * Add/subtract time from date/time
+   * @param date Base date/time
+   * @param amount Amount to add (positive) or subtract (negative)
+   * @param unit Time unit: d, w, m, y, h, min, s
+   * @returns New Date object
+   */
+  static addToDateTime(date: Date, amount: number, unit: string): Date {
+    const newDate = new Date(date);
+
+    switch (unit) {
+      case 'd':
+        newDate.setDate(newDate.getDate() + amount);
+        break;
+      case 'w':
+        newDate.setDate(newDate.getDate() + amount * 7);
+        break;
+      case 'm':
+        newDate.setMonth(newDate.getMonth() + amount);
+        break;
+      case 'y':
+        newDate.setFullYear(newDate.getFullYear() + amount);
+        break;
+      case 'h':
+        newDate.setHours(newDate.getHours() + amount);
+        break;
+      case 'min':
+        newDate.setMinutes(newDate.getMinutes() + amount);
+        break;
+      case 's':
+        newDate.setSeconds(newDate.getSeconds() + amount);
+        break;
+      default:
+        throw new Error(
+          `Unsupported time unit: ${unit}. Use 'd', 'w', 'm', 'y' for dates or 'h', 'min', 's' for time.`,
+        );
+    }
+
+    return newDate;
+  }
+
+  /**
+   * Get date with offset
+   * @param offset Days offset from today (0=today, 1=tomorrow, -1=yesterday)
+   * @param format Output format: 'default' for DD/MM/YYYY or 'iso' for YYYY-MM-DD
+   * @returns Date string in specified format
+   */
+  static getDateWithOffset(
+    offset: number = 0,
+    format: 'default' | 'iso' = 'default',
+  ): string {
+    const date = this.addToDateTime(new Date(), offset, 'd');
+
+    if (format === 'iso') {
+      return date.toISOString().split('T')[0]; // YYYY-MM-DD
+    }
+
+    return this.formatDate(date);
+  }
+
+  /**
+   * Add time to current time
+   * @param amount Number to add (can be negative)
+   * @param unit Time unit: 'h' (hours), 'min' (minutes), 's' (seconds)
+   * @returns Time string in HH:mm:ss format
+   */
+  static getTimeWithOffset(amount: number, unit: string): string {
+    const result = this.addToDateTime(new Date(), amount, unit);
+    return this.formatTime(result);
+  }
+
+  /**
+   * Add time to current timestamp
+   * @param amount Number to add (can be negative)
+   * @param unit Time unit: 'd', 'w', 'm', 'y', 'h', 'min', 's'
+   * @returns ISO timestamp string
+   */
+  static getTimestampWithOffset(amount: number, unit: string): string {
+    const result = this.addToDateTime(new Date(), amount, unit);
+    return result.toISOString();
+  }
+
+  /**
+   * Checks if two time strings (HH:mm format) are within a tolerance in minutes
+   * @param actualTime The actual time found (e.g., "11:58")
+   * @param expectedTime The expected time (e.g., "11:59")
+   * @param toleranceMinutes Tolerance in minutes (default: 2)
+   * @returns True if times are within tolerance, false otherwise
+   */
+  static isTimeWithinTolerance(
+    actualTime: string,
+    expectedTime: string,
+    toleranceMinutes: number = 2,
+  ): boolean {
+    // Check if both strings match HH:mm format
+    const timeRegex = /^(\d{1,2}):(\d{2})$/;
+    const actualMatch = actualTime.match(timeRegex);
+    const expectedMatch = expectedTime.match(timeRegex);
+
+    if (!actualMatch || !expectedMatch) {
+      return false; // Not time strings in HH:mm format
+    }
+
+    // Parse times into minutes since midnight
+    const actualMinutes =
+      Number.parseInt(actualMatch[1], 10) * 60 +
+      Number.parseInt(actualMatch[2], 10);
+    const expectedMinutes =
+      Number.parseInt(expectedMatch[1], 10) * 60 +
+      Number.parseInt(expectedMatch[2], 10);
+
+    // Calculate difference
+    const diff = Math.abs(actualMinutes - expectedMinutes);
+
+    // Check if within tolerance
+    return diff <= toleranceMinutes;
+  }
+}

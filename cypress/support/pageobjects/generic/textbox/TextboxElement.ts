@@ -1,0 +1,105 @@
+/// <reference types="cypress" />
+import { StringUtils } from '../../../utils/StringUtils';
+
+export class TextboxElement {
+  /**
+   * Finds a textbox element by label text (exact match, case-insensitive)
+   */
+  static findTextbox(
+    labelOrIdentifier: string,
+  ): Cypress.Chainable<JQuery<HTMLElement>> {
+    const normalized = StringUtils.normalizeText(labelOrIdentifier);
+    const escaped = normalized.replaceAll(
+      /[.*+?^${}()|[\]\\]/g,
+      String.raw`\$&`,
+    );
+    const exactRegex = new RegExp(String.raw`^\s*${escaped}\s*$`, 'i');
+    return cy
+      .contains(
+        'label, input[placeholder], textarea[placeholder], input[aria-label], textarea[aria-label], select[aria-label]',
+        exactRegex,
+      )
+      .then(($el) => {
+        // If it's a label, find the associated input
+        if ($el.is('label')) {
+          const forAttr = $el.attr('for');
+          if (forAttr) {
+            // Scope to the parent form group to handle duplicate IDs on the page
+            const $formGroup = $el.closest('.govuk-form-group');
+            if ($formGroup.length) {
+              return cy
+                .wrap($formGroup)
+                .find('input, textarea, select')
+                .first();
+            }
+            // Fallback: global ID lookup for unique IDs
+            return cy.get(`#${forAttr}`).then(($target) => {
+              if ($target.is('input, textarea, select')) {
+                return cy.wrap($target);
+              }
+              const inputInside = $target.find('input, textarea, select');
+              if (inputInside.length > 0) {
+                return cy.wrap(inputInside.first());
+              }
+              return cy.wrap($target);
+            });
+          }
+          // No 'for' attribute, look in parent container
+          return cy.wrap($el).parent().find('input, textarea, select').first();
+        }
+        // If it's already an input/textarea/select, return it
+        return cy.wrap($el);
+      });
+    // });
+  }
+
+  /**
+   * Finds a textbox within a given jQuery root element (e.g. a fieldset).
+   * Uses synchronous jQuery to avoid cy.within() nesting issues.
+   */
+  static findTextboxWithin(
+    $root: JQuery<HTMLElement>,
+    labelOrIdentifier: string,
+  ): Cypress.Chainable<JQuery<HTMLElement>> {
+    const normalized =
+      StringUtils.normalizeText(labelOrIdentifier).toLowerCase();
+    const $label = $root
+      .find('label')
+      .filter(
+        (_, el) =>
+          StringUtils.normalizeText(
+            el.textContent?.trim() || '',
+          ).toLowerCase() === normalized,
+      );
+    if ($label.length > 0) {
+      const forAttr = $label.first().attr('for');
+      if (forAttr) {
+        return cy.get(`#${forAttr}`);
+      }
+    }
+    // Fallback: first input/textarea inside root
+    return cy.wrap($root.find('input, textarea').first());
+  }
+
+  /**
+   * Finds an input/textarea by its placeholder attribute
+   */
+  static findByPlaceholder(
+    placeholder: string,
+  ): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.get(
+      `input[placeholder="${placeholder}"], textarea[placeholder="${placeholder}"]`,
+    );
+  }
+
+  /**
+   * Finds an element containing the given text within the current DOM context
+   */
+  static findContainsText(
+    text: string,
+  ): Cypress.Chainable<JQuery<HTMLElement>> {
+    return cy.contains(text) as unknown as Cypress.Chainable<
+      JQuery<HTMLElement>
+    >;
+  }
+}
